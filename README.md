@@ -1,0 +1,1 @@
+Nonogram Picross Solver & Editor — play 5 preset puzzles (5×5 to 10×10), create custom patterns in editor mode with auto-generated clues, right-click ×-marks, answer checking, and localStorage save/load.

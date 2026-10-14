@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nonogram Picross Solver & Editor</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  .cell {
+    width: 36px; height: 36px;
+    border: 1px solid #374151;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: bold;
+    user-select: none;
+    transition: background 0.1s;
+  }
+  .cell.filled { background: #e5e7eb; }
+  .cell.filled.dark { background: #1e3a5f; }
+  .cell.marked { background: #374151; color: #ef4444; }
+  .cell.editor-on { background: #1e3a5f; }
+  .cell.editor-off { background: #0f172a; }
+  .cell.editor-hover { background: #1e3a5f88; }
+  .cell.correct { background: #065f46 !important; }
+  .cell.wrong { background: #7f1d1d !important; }
+  .clue { min-width: 36px; height: 36px; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:600; }
+  .section-border-r { border-right: 2px solid #4b5563; }
+  .section-border-b { border-bottom: 2px solid #4b5563; }
+  #grid-wrapper { overflow: auto; }
+</style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen flex flex-col items-center p-4">
+  <div class="w-full max-w-4xl">
+    <h1 class="text-2xl font-bold text-center mb-1 text-pink-400">Nonogram Picross</h1>
+    <p class="text-center text-gray-400 text-sm mb-4">Solve picture logic puzzles — or create your own!</p>
+
+    <!-- Mode tabs -->
+    <div class="flex justify-center gap-2 mb-4">
+      <button id="tab-play" onclick="switchTab('play')"
+        class="px-5 py-2 rounded-lg font-semibold text-sm transition-colors bg-pink-600 text-white">
+        Play Mode
+      </button>
+      <button id="tab-edit" onclick="switchTab('edit')"
+        class="px-5 py-2 rounded-lg font-semibold text-sm transition-colors bg-gray-700 text-gray-300">
+        Editor Mode
+      </button>
+    </div>
+
+    <!-- Top toolbar -->
+    <div class="flex flex-wrap gap-2 justify-center mb-4">
+      <!-- Grid size -->
+      <div class="flex items-center gap-2 bg-gray-900 rounded-lg px-3 py-2">
+        <label class="text-xs text-gray-400">Size:</label>
+        <select id="size-select" onchange="changeSize(this.value)"
+          class="bg-gray-800 border border-gray-600 rounded px-2 py-1 text-sm">
+          <option value="5">5×5</option>
+          <option value="7">7×7</option>
+          <option value="10" selected>10×10</option>
+        </select>
+      </div>
+
+      <!-- Presets (play mode) -->
+      <div id="preset-btns" class="flex gap-2 flex-wrap justify-center">
+        <span class="text-xs text-gray-500 self-center">Presets:</span>
+        <button onclick="loadPreset(0)" class="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs transition-colors">Heart</button>
+        <button onclick="loadPreset(1)" class="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs transition-colors">Arrow</button>
+        <button onclick="loadPreset(2)" class="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs transition-colors">Letter A</button>
+        <button onclick="loadPreset(3)" class="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs transition-colors">Smile</button>
+        <button onclick="loadPreset(4)" class="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs transition-colors">Diamond</button>
+      </div>
+
+      <!-- Check / Reset -->
+      <button id="check-btn" onclick="checkSolution()"
+        class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded-lg text-sm font-medium transition-colors">
+        Check Answer
+      </button>
+      <button onclick="resetPlay()"
+        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-medium transition-colors">
+        Reset Board
+      </button>
+    </div>
+
+    <!-- Editor toolbar -->
+    <div id="editor-toolbar" class="hidden flex-wrap gap-2 justify-center mb-4">
+      <button onclick="generateFromEditor()"
+        class="px-4 py-2 bg-pink-700 hover:bg-pink-600 rounded-lg text-sm font-medium transition-colors">
+        Generate Puzzle from Pattern
+      </button>
+      <button onclick="clearEditor()"
+        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-medium transition-colors">
+        Clear
+      </button>
+      <button onclick="saveCustom()"
+        class="px-4 py-2 bg-blue-700 hover:bg-blue-600 rounded-lg text-sm font-medium transition-colors">
+        Save to localStorage
+      </button>
+      <button onclick="loadCustom()"
+        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-medium transition-colors">
+        Load Saved
+      </button>
+    </div>
+
+    <!-- Status bar -->
+    <div id="status-bar" class="text-center text-sm mb-3 h-6 font-semibold"></div>
+
+    <!-- Grid -->
+    <div id="grid-wrapper" class="flex justify-center">
+      <div id="grid-root"></div>
+    </div>
+
+    <!-- Legend -->
+    <div class="mt-4 text-xs text-gray-500 text-center">
+      <span class="text-gray-300">Left click</span> = fill &nbsp;|&nbsp;
+      <span class="text-gray-300">Right click</span> = mark ×  &nbsp;|&nbsp; Clues auto-update in Editor mode
+    </div>
+  </div>
+
+<script>
+let N = 10;
+let tabMode = 'play';
+
+// solution[r][c] = 0|1  (the correct answer / editor pattern)
+let solution = [];
+// playerGrid[r][c] = 0|1|-1(marked)
+let playerGrid = [];
+// editorGrid[r][c] = 0|1
+let editorGrid = [];
+
+let rowClues = [];
+let colClues = [];
+
+let isDragging = false;
+let dragVal = null; // what value we're painting
+
+// ─────────────── Preset puzzles ───────────────
+const PRESETS = [
+  { // Heart 10x10
+    name: 'Heart', size: 10,
+    pattern: [
+      [0,1,1,0,0,0,1,1,0,0],
+      [1,1,1,1,0,1,1,1,1,0],
+      [1,1,1,1,1,1,1,1,1,0],
+      [1,1,1,1,1,1,1,1,1,0],
+      [0,1,1,1,1,1,1,1,0,0],
+      [0,0,1,1,1,1,1,0,0,0],
+      [0,0,0,1,1,1,0,0,0,0],
+      [0,0,0,0,1,0,0,0,0,0],
+      [0,0,0,0,0,0,0,0,0,0],
+      [0,0,0,0,0,0,0,0,0,0],
+    ]
+  },
+  { // Arrow 7x7
+    name: 'Arrow', size: 7,
+    pattern: [
+      [0,0,1,0,0,0,0],
+      [0,1,1,0,0,0,0],
+      [1,1,1,1,1,1,1],
+      [0,1,1,0,0,0,0],
+      [0,0,1,0,0,0,0],
+      [0,0,0,0,0,0,0],
+      [0,0,0,0,0,0,0],
+    ]
+  },
+  { // Letter A 10x10
+    name: 'Letter A', size: 10,
+    pattern: [
+      [0,0,0,1,1,1,1,0,0,0],
+      [0,0,1,1,0,0,1,1,0,0],
+      [0,0,1,1,0,0,1,1,0,0],
+      [0,1,1,0,0,0,0,1,1,0],
+      [0,1,1,0,0,0,0,1,1,0],
+      [0,1,1,1,1,1,1,1,1,0],
+      [1,1,0,0,0,0,0,0,1,1],
+      [1,1,0,0,0,0,0,0,1,1],
+      [0,0,0,0,0,0,0,0,0,0],
+      [0,0,0,0,0,0,0,0,0,0],
+    ]
+  },
+  { // Smile 10x10
+    name: 'Smile', size: 10,
+    pattern: [
+      [0,0,1,1,1,1,1,1,0,0],
+      [0,1,0,0,0,0,0,0,1,0],
+      [1,0,0,1,0,0,1,0,0,1],
+      [1,0,0,1,0,0,1,0,0,1],
+      [1,0,0,0,0,0,0,0,0,1],
+      [1,0,1,0,0,0,0,1,0,1],
+      [1,0,0,1,1,1,1,0,0,1],
+      [0,1,0,0,0,0,0,0,1,0],
+      [0,0,1,1,1,1,1,1,0,0],
+      [0,0,0,0,0,0,0,0,0,0],
+    ]
+  },
+  { // Diamond 5x5
+    name: 'Diamond', size: 5,
+    pattern: [
+      [0,0,1,0,0],
+      [0,1,1,1,0],
+      [1,1,1,1,1],
+      [0,1,1,1,0],
+      [0,0,1,0,0],
+    ]
+  },
+];
+
+// ─────────────── Clue calculation ───────────────
+function calcClues(grid, n) {
+  const rows = [], cols = [];
+  for (let r = 0; r < n; r++) {
+    rows.push(runLengths(grid[r]));
+  }
+  for (let c = 0; c < n; c++) {
+    const col = grid.map(row => row[c]);
+    cols.push(runLengths(col));
+  }
+  return { rows, cols };
+}
+
+function runLengths(arr) {
+  const runs = [];
+  let cur = 0;
+  arr.forEach(v => {
+    if (v === 1) cur++;
+    else if (cur > 0) { runs.push(cur); cur = 0; }
+  });
+  if (cur > 0) runs.push(cur);
+  return runs.length ? runs : [0];
+}
+
+// ─────────────── Init / Load ───────────────
+function initGrids(n) {
+  N = n;
+  solution = Array.from({ length: n }, () => Array(n).fill(0));
+  playerGrid = Array.from({ length: n }, () => Array(n).fill(0));
+  editorGrid = Array.from({ length: n }, () => Array(n).fill(0));
+}
+
+function loadPreset(idx) {
+  const p = PRESETS[idx];
+  N = p.size;
+  document.getElementById('size-select').value = N;
+  solution = p.pattern.map(row => [...row]);
+  playerGrid = Array.from({ length: N }, () => Array(N).fill(0));
+  const c = calcClues(solution, N);
+  rowClues = c.rows; colClues = c.cols;
+  setStatus('');
+  renderPlayGrid();
+}
+
+function changeSize(val) {
+  N = parseInt(val);
+  initGrids(N);
+  const c = calcClues(solution, N);
+  rowClues = c.rows; colClues = c.cols;
+  setStatus('');
+  if (tabMode === 'play') renderPlayGrid();
+  else renderEditorGrid();
+}
+
+// ─────────────── Tab switching ───────────────
+function switchTab(tab) {
+  tabMode = tab;
+  document.getElementById('tab-play').className =
+    'px-5 py-2 rounded-lg font-semibold text-sm transition-colors ' +
+    (tab === 'play' ? 'bg-pink-600 text-white' : 'bg-gray-700 text-gray-300');
+  document.getElementById('tab-edit').className =
+    'px-5 py-2 rounded-lg font-semibold text-sm transition-colors ' +
+    (tab === 'edit' ? 'bg-pink-600 text-white' : 'bg-gray-700 text-gray-300');
+  document.getElementById('preset-btns').style.display = tab === 'play' ? '' : 'none';
+  document.getElementById('check-btn').style.display = tab === 'play' ? '' : 'none';
+  document.getElementById('editor-toolbar').style.display = tab === 'edit' ? 'flex' : 'none';
+  setStatus('');
+  if (tab === 'play') renderPlayGrid();
+  else renderEditorGrid();
+}
+
+// ─────────────── Render play grid ───────────────
+function renderPlayGrid() {
+  const root = document.getElementById('grid-root');
+  root.innerHTML = '';
+
+  const maxRowClue = Math.max(...rowClues.map(r => r.length));
+  const maxColClue = Math.max(...colClues.map(c => c.length));
+
+  const table = document.createElement('div');
+  table.style.display = 'grid';
+  table.style.gridTemplateColumns = `repeat(${maxRowClue}, 28px) repeat(${N}, 36px)`;
+
+  // Header rows (col clues)
+  for (let ci = 0; ci < maxColClue; ci++) {
+    // Empty corner cells
+    for (let k = 0; k < maxRowClue; k++) {
+      const blank = document.createElement('div');
+      blank.style.width = '28px'; blank.style.height = '28px';
+      table.appendChild(blank);
+    }
+    // Col clue cells
+    for (let c = 0; c < N; c++) {
+      const clue = colClues[c];
+      const row_i = ci - (maxColClue - clue.length);
+      const div = document.createElement('div');
+      div.className = 'clue';
+      div.style.width = '36px'; div.style.height = '28px'; div.style.fontSize = '12px';
+      div.textContent = row_i >= 0 ? clue[row_i] : '';
+      if (row_i >= 0 && clue[row_i] === 0) div.textContent = '—';
+      table.appendChild(div);
+    }
+  }
+
+  // Data rows
+  for (let r = 0; r < N; r++) {
+    // Row clues
+    const rclue = rowClues[r];
+    for (let k = 0; k < maxRowClue; k++) {
+      const div = document.createElement('div');
+      div.className = 'clue';
+      div.style.width = '28px'; div.style.height = '36px'; div.style.fontSize = '12px';
+      const idx = k - (maxRowClue - rclue.length);
+      div.textContent = idx >= 0 ? (rclue[idx] === 0 ? '—' : rclue[idx]) : '';
+      table.appendChild(div);
+    }
+    // Cells
+    for (let c = 0; c < N; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.dataset.r = r; cell.dataset.c = c;
+      updateCellDisplay(cell, r, c, 'play');
+
+      cell.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        isDragging = true;
+        const cur = playerGrid[r][c];
+        if (e.button === 2) {
+          dragVal = cur === -1 ? 0 : -1;
+          playerGrid[r][c] = dragVal;
+        } else {
+          dragVal = cur === 1 ? 0 : 1;
+          playerGrid[r][c] = dragVal;
+        }
+        updateCellDisplay(cell, r, c, 'play');
+        setStatus('');
+      });
+      cell.addEventListener('mouseover', () => {
+        if (!isDragging) return;
+        playerGrid[r][c] = dragVal;
+        updateCellDisplay(cell, r, c, 'play');
+      });
+      cell.addEventListener('contextmenu', e => e.preventDefault());
+      table.appendChild(cell);
+    }
+  }
+
+  root.appendChild(table);
+  document.addEventListener('mouseup', () => { isDragging = false; });
+}
+
+function updateCellDisplay(cell, r, c, mode) {
+  cell.className = 'cell';
+  cell.textContent = '';
+  if (mode === 'play') {
+    const v = playerGrid[r][c];
+    if (v === 1) { cell.classList.add('filled', 'dark'); }
+    else if (v === -1) { cell.classList.add('marked'); cell.textContent = '×'; }
+  } else {
+    if (editorGrid[r][c] === 1) cell.classList.add('editor-on');
+    else cell.classList.add('editor-off');
+  }
+}
+
+// ─────────────── Render editor grid ───────────────
+function renderEditorGrid() {
+  const root = document.getElementById('grid-root');
+  root.innerHTML = '';
+
+  const table = document.createElement('div');
+  table.style.display = 'grid';
+  table.style.gridTemplateColumns = `repeat(${N}, 36px)`;
+
+  for (let r = 0; r < N; r++) {
+    for (let c = 0; c < N; c++) {
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.dataset.r = r; cell.dataset.c = c;
+      if (editorGrid[r][c]) cell.classList.add('editor-on');
+      else cell.classList.add('editor-off');
+
+      cell.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        isDragging = true;
+        dragVal = editorGrid[r][c] === 1 ? 0 : 1;
+        editorGrid[r][c] = dragVal;
+        cell.className = 'cell ' + (dragVal ? 'editor-on' : 'editor-off');
+      });
+      cell.addEventListener('mouseover', () => {
+        if (!isDragging) return;
+        editorGrid[r][c] = dragVal;
+        cell.className = 'cell ' + (dragVal ? 'editor-on' : 'editor-off');
+      });
+      cell.addEventListener('contextmenu', e => e.preventDefault());
+      table.appendChild(cell);
+    }
+  }
+
+  root.appendChild(table);
+  document.addEventListener('mouseup', () => { isDragging = false; });
+}
+
+function generateFromEditor() {
+  solution = editorGrid.map(row => [...row]);
+  const c = calcClues(solution, N);
+  rowClues = c.rows; colClues = c.cols;
+  playerGrid = Array.from({ length: N }, () => Array(N).fill(0));
+  switchTab('play');
+  setStatus('Puzzle generated from your pattern!', 'green');
+}
+
+function clearEditor() {
+  editorGrid = Array.from({ length: N }, () => Array(N).fill(0));
+  renderEditorGrid();
+}
+
+function saveCustom() {
+  const data = { N, editorGrid };
+  localStorage.setItem('nonogramCustom', JSON.stringify(data));
+  setStatus('Saved to localStorage!', 'green');
+}
+
+function loadCustom() {
+  const raw = localStorage.getItem('nonogramCustom');
+  if (!raw) { setStatus('No saved puzzle found.', 'red'); return; }
+  const data = JSON.parse(raw);
+  N = data.N;
+  document.getElementById('size-select').value = N;
+  editorGrid = data.editorGrid;
+  switchTab('edit');
+  setStatus('Loaded from localStorage!', 'green');
+}
+
+// ─────────────── Check / Reset ───────────────
+function checkSolution() {
+  let correct = 0, total = 0;
+  const cells = document.querySelectorAll('.cell');
+  cells.forEach(cell => {
+    const r = parseInt(cell.dataset.r);
+    const c = parseInt(cell.dataset.c);
+    total++;
+    const sol = solution[r]?.[c] ?? 0;
+    const play = playerGrid[r][c];
+    cell.classList.remove('correct', 'wrong');
+    if (sol === 1 && play === 1) { cell.classList.add('correct'); correct++; }
+    else if (sol === 0 && play !== 1) { cell.classList.add('correct'); correct++; }
+    else { cell.classList.add('wrong'); }
+  });
+  if (correct === total) {
+    setStatus('Congratulations! Puzzle solved!', 'green');
+  } else {
+    const wrong = total - correct;
+    setStatus(`${wrong} cell(s) incorrect — keep trying!`, 'red');
+  }
+  setTimeout(() => {
+    document.querySelectorAll('.cell').forEach(cell => {
+      cell.classList.remove('correct', 'wrong');
+    });
+  }, 1500);
+}
+
+function resetPlay() {
+  playerGrid = Array.from({ length: N }, () => Array(N).fill(0));
+  setStatus('');
+  renderPlayGrid();
+}
+
+function setStatus(msg, color = 'gray') {
+  const el = document.getElementById('status-bar');
+  el.textContent = msg;
+  el.className = 'text-center text-sm mb-3 h-6 font-semibold ' +
+    (color === 'green' ? 'text-green-400' : color === 'red' ? 'text-red-400' : 'text-gray-400');
+}
+
+// ─────────────── Boot ───────────────
+initGrids(10);
+loadPreset(0);
+</script>
+</body>
+</html>
